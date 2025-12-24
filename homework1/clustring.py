@@ -1,6 +1,7 @@
 import os
 import json
 import numpy as np
+import argparse
 from PIL import Image
 import torch
 import torchvision.models as models
@@ -10,6 +11,32 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from tqdm import tqdm
 
+def resolve_cluster_paths(base_dir, dataset_path=None, labels_path=None):
+    if dataset_path is not None:
+        dataset_path = os.path.abspath(dataset_path)
+    if labels_path is not None:
+        labels_path = os.path.abspath(labels_path)
+    if dataset_path and labels_path:
+        return dataset_path, labels_path
+
+    probe_dir = os.path.abspath(base_dir)
+    for _ in range(10):
+        candidate_dataset = os.path.join(probe_dir, 'Cluster', 'dataset')
+        candidate_labels = os.path.join(probe_dir, 'Cluster', 'cluster_labels.json')
+        if dataset_path is None and os.path.isdir(candidate_dataset):
+            dataset_path = os.path.abspath(candidate_dataset)
+        if labels_path is None and os.path.isfile(candidate_labels):
+            labels_path = os.path.abspath(candidate_labels)
+        if dataset_path and labels_path:
+            return dataset_path, labels_path
+
+        parent = os.path.dirname(probe_dir)
+        if parent == probe_dir:
+            break
+        probe_dir = parent
+
+    return dataset_path, labels_path
+
 def load_data(dataset_path):
     image_files = [f for f in os.listdir(dataset_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
     image_files.sort()  # Ensure consistent order
@@ -17,7 +44,10 @@ def load_data(dataset_path):
 
 def extract_features(dataset_path, image_files, device):
     # Load pre-trained ResNet50
-    model = models.resnet50(pretrained=True)
+    try:
+        model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+    except Exception:
+        model = models.resnet50(pretrained=True)
     # Remove the last fully connected layer to get feature vectors
     model = torch.nn.Sequential(*(list(model.children())[:-1]))
     model = model.to(device)
@@ -56,12 +86,21 @@ def perform_clustering(features, n_clusters=6):
     
     # Optional: PCA for dimensionality reduction before K-Means
     # It often helps K-Means to work on lower dimensions
-    pca = PCA(n_components=50, random_state=42)
+    max_components = min(50, features.shape[0], features.shape[1])
+    if max_components < 2:
+        raise ValueError(f"Not enough data for PCA. features shape: {features.shape}")
+    pca = PCA(n_components=max_components, random_state=42)
     features_pca = pca.fit_transform(features)
+
+    if features_pca.shape[1] >= 2:
+        pca_2d = PCA(n_components=2, random_state=42)
+        features_2d = pca_2d.fit_transform(features_pca)
+    else:
+        features_2d = np.zeros((features_pca.shape[0], 2))
     
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     clusters = kmeans.fit_predict(features_pca)
-    return clusters
+    return clusters, features_pca, features_2d
 
 def evaluate_results(image_files, clusters, labels_path):
     try:
@@ -102,10 +141,27 @@ def evaluate_results(image_files, clusters, labels_path):
         print(f"Evaluation failed: {e}")
 
 def main():
-    # Paths
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', type=str, default=None)
+    parser.add_argument('--labels', type=str, default=None)
+    args = parser.parse_args()
+
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    dataset_path = os.path.abspath(os.path.join(base_dir, '../Cluster/dataset'))
-    labels_path = os.path.abspath(os.path.join(base_dir, '../Cluster/cluster_labels.json'))
+    dataset_path, labels_path = resolve_cluster_paths(
+        base_dir=base_dir,
+        dataset_path=args.dataset,
+        labels_path=args.labels,
+    )
+    if not dataset_path or not os.path.isdir(dataset_path):
+        raise FileNotFoundError(
+            f"dataset_path not found. Resolved: {dataset_path}. "
+            f"You can pass it via --dataset"
+        )
+    if not labels_path or not os.path.isfile(labels_path):
+        raise FileNotFoundError(
+            f"labels_path not found. Resolved: {labels_path}. "
+            f"You can pass it via --labels"
+        )
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -119,7 +175,7 @@ def main():
 
     # 3. Cluster
     # We know there are 6 categories: transistor, leather, pill, bottle, tile, cable
-    clusters = perform_clustering(features, n_clusters=6)
+    clusters, features_pca, features_2d = perform_clustering(features, n_clusters=6)
 
     # 4. Evaluate
     evaluate_results(image_files, clusters, labels_path)
@@ -130,6 +186,19 @@ def main():
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=4)
     print(f"\nClustering assignments saved to {output_file}")
+
+    features_pca_file = os.path.join(base_dir, 'features_pca.npy')
+    np.save(features_pca_file, features_pca)
+    print(f"PCA features saved to {features_pca_file}")
+
+    features_2d_file = os.path.join(base_dir, 'features_2d.npy')
+    np.save(features_2d_file, features_2d)
+    print(f"2D features saved to {features_2d_file}")
+
+    image_files_file = os.path.join(base_dir, 'image_files.json')
+    with open(image_files_file, 'w', encoding='utf-8') as f:
+        json.dump(image_files, f, indent=4, ensure_ascii=False)
+    print(f"Image file list saved to {image_files_file}")
 
 if __name__ == "__main__":
     main()

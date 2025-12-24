@@ -2,17 +2,26 @@
     "metrics": {
         "ARI": 1.0,
         "NMI": 1.0,
+        "homogeneity": 1.0,
+        "completeness": 1.0,
+        "v_measure": 1.0,
+        "fmi": 1.0,
         "accuracy": 1.0,
         "correct": 600,
         "total": 600
     },
+    "internal_metrics": {
+        "silhouette": 0.7503861784934998,
+        "calinski_harabasz": 1694.9248046875,
+        "davies_bouldin": 0.4082401633213541
+    },
     "cluster_mapping": {
-        "3": "transistor",
+        "1": "transistor",
         "0": "leather",
-        "2": "pill",
-        "1": "bottle",
-        "5": "tile",
-        "4": "cable"
+        "4": "pill",
+        "2": "bottle",
+        "3": "tile",
+        "5": "cable"
     },
     "errors": []
 }
